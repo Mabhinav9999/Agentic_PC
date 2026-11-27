@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent import APCAgent
-from .cache import JsonPlanCache
+from .cache import TieredPlanCache
 from .llm import OpenAICompatibleClient
 from .prompts import correctness_judge_prompt
 
@@ -23,9 +23,11 @@ def model_env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
-def make_agent(
-    cache_path: str,
-) -> tuple[APCAgent, dict[str, OpenAICompatibleClient], str]:
+def make_agent() -> tuple[
+    APCAgent,
+    dict[str, OpenAICompatibleClient],
+    str,
+]:
     clients = {
         role: OpenAICompatibleClient.from_env(role)
         for role in ROLES
@@ -36,7 +38,7 @@ def make_agent(
 
     agent = APCAgent(
         clients,
-        JsonPlanCache(cache_path),
+        TieredPlanCache.from_env(),
         keyword_model=model_env("APC_KEYWORD_MODEL", local_model),
         small_model=model_env("APC_SMALL_MODEL", local_model),
         large_model=model_env(
@@ -134,12 +136,11 @@ def main() -> None:
     )
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--cache", default="apc_cache.json")
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    agent, clients, judge_model = make_agent(args.cache)
+    agent, clients, judge_model = make_agent()
 
     rows: list[dict[str, Any]] = []
     latencies: list[float] = []
