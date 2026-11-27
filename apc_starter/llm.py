@@ -8,11 +8,28 @@ import urllib.error
 import urllib.request
 
 
-class OpenAICompatibleClient:
-    def __init__(self, base_url: str, api_key: str, timeout: int = 120):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.timeout = timeout
+def __init__(
+    self,
+    clients: dict[str, OpenAICompatibleClient],
+    cache: JsonPlanCache,
+    *,
+    keyword_model: str,
+    small_model: str,
+    large_model: str,
+    actor_model: str,
+    cache_model: str,
+    judge_model: str,
+    max_turns: int = 6,
+):
+    self.clients = {role.upper(): client for role, client in clients.items()}
+    self.cache = cache
+    self.keyword_model = keyword_model
+    self.small_model = small_model
+    self.large_model = large_model
+    self.actor_model = actor_model
+    self.cache_model = cache_model
+    self.judge_model = judge_model
+    self.max_turns = max_turns
 
     @classmethod
     @classmethod
