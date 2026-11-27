@@ -48,7 +48,7 @@ class APCAgent:
         self.judge_model = judge_model
         self.max_turns = max_turns
 
-    def run(self, query: str, context: str) -> AgentResult:
+        def run(self, query: str, context: str) -> AgentResult:
         keyword = self.clients["KEYWORD"].complete(
             self.keyword_model,
             prompts.keyword_prompt(query),
@@ -58,126 +58,156 @@ class APCAgent:
             raise RuntimeError("Keyword extraction returned an empty keyword")
 
         template = self.cache.get(keyword)
-        cache_hit = template is not None
-        history: list[dict[str, str]] = []
-        trace: list[dict[str, str]] = []
-        template_index = 0
+        initial_cache_hit = template is not None
+        using_cached_plan = initial_cache_hit
+        escalated = False
+        total_actor_turns = 0
 
-        planner_role = "SMALL" if cache_hit else "LARGE"
-        planner_model = self.small_model if cache_hit else self.large_model
+        while True:
+            history: list[dict[str, str]] = []
+            trace: list[dict[str, str]] = []
+            template_index = 0
+            replan_required = False
 
-        for _ in range(self.max_turns):
-            template_step = None
-
-            if (
-                cache_hit
-                and template is not None
-                and template_index < len(template.workflow)
-            ):
-                step = template.workflow[template_index]
-                template_step = {
-                    "type": step["type"],
-                    "content": step["content"],
-                }
-
-            planner_raw = self.clients[planner_role].complete(
-                planner_model,
-                prompts.planner_prompt(
-                    query,
-                    history,
-                    template_step,
-                ),
-                json_mode=True,
+            planner_role = "SMALL" if using_cached_plan else "LARGE"
+            planner_model = (
+                self.small_model if using_cached_plan else self.large_model
             )
 
-            decision = self._json_object(planner_raw, "planner")
-            status = decision.get("status")
+            for _ in range(self.max_turns):
+                template_step = None
 
-            if status == "final":
-                answer = str(decision.get("answer", "")).strip()
+                if (
+                    using_cached_plan
+                    and template is not None
+                    and template_index < len(template.workflow)
+                ):
+                    step = template.workflow[template_index]
+                    template_step = {
+                        "type": step["type"],
+                        "content": step["content"],
+                    }
 
-                if not answer:
-                    raise RuntimeError(
-                        "Planner returned final status without an answer"
+                planner_raw = self.clients[planner_role].complete(
+                    planner_model,
+                    prompts.planner_prompt(
+                        query,
+                        history,
+                        template_step,
+                    ),
+                    json_mode=True,
+                )
+
+                decision = self._json_object(planner_raw, "planner")
+                status = decision.get("status")
+
+                if status == "final":
+                    answer = str(decision.get("answer", "")).strip()
+
+                    if not answer:
+                        raise RuntimeError(
+                            "Planner returned final status without an answer"
+                        )
+
+                    judged = self._json_object(
+                        self.clients["JUDGE"].complete(
+                            self.judge_model,
+                            prompts.judge_prompt(
+                                query,
+                                context,
+                                history,
+                                answer,
+                            ),
+                            json_mode=True,
+                        ),
+                        "judge",
                     )
 
-                judged = self._json_object(
-                    self.clients["JUDGE"].complete(
-                        self.judge_model,
-                        prompts.judge_prompt(
-                            query,
-                            context,
-                            history,
-                            answer,
-                        ),
-                        json_mode=True,
-                    ),
-                    "judge",
-                )
+                    success = judged.get("success") is True
 
-                success = judged.get("success") is True
-                added = False
+                    if not success and using_cached_plan:
+                        # Discard the cached attempt and replan from scratch.
+                        using_cached_plan = False
+                        template = None
+                        escalated = True
+                        replan_required = True
+                        break
 
-                if success and not cache_hit:
-                    trace.append({"type": "answer", "content": answer})
-                    workflow = self._generate_template(keyword, trace)
+                    added = False
+                    if success and (not initial_cache_hit or escalated):
+                        trace.append({"type": "answer", "content": answer})
+                        workflow = self._generate_template(keyword, trace)
 
-                    if workflow:
-                        self.cache.put(
-                            PlanTemplate(
-                                keyword=keyword,
-                                workflow=workflow,
-                                created_at=datetime.now(
-                                    timezone.utc
-                                ).isoformat(),
+                        if workflow:
+                            self.cache.put(
+                                PlanTemplate(
+                                    keyword=keyword,
+                                    workflow=workflow,
+                                    created_at=datetime.now(
+                                        timezone.utc
+                                    ).isoformat(),
+                                )
                             )
-                        )
-                        added = True
+                            added = True
 
-                return AgentResult(
-                    answer,
-                    keyword,
-                    cache_hit,
-                    len(history),
-                    added,
-                    success,
+                    return AgentResult(
+                        answer,
+                        keyword,
+                        initial_cache_hit,
+                        total_actor_turns,
+                        added,
+                        success,
+                    )
+
+                if status != "act":
+                    raise RuntimeError(
+                        f"Planner returned unsupported status: {status!r}"
+                    )
+
+                action = str(decision.get("message", "")).strip()
+
+                if not action:
+                    raise RuntimeError(
+                        "Planner requested an actor turn without a message"
+                    )
+
+                actor_response = self.clients["ACTOR"].complete(
+                    self.actor_model,
+                    prompts.actor_prompt(
+                        query,
+                        context,
+                        action,
+                        history,
+                    ),
                 )
 
-            if status != "act":
-                raise RuntimeError(
-                    f"Planner returned unsupported status: {status!r}"
+                total_actor_turns += 1
+                history.append(
+                    {"message": action, "response": actor_response}
+                )
+                trace.extend(
+                    [
+                        {"type": "message", "content": action},
+                        {"type": "output", "content": actor_response},
+                    ]
                 )
 
-            action = str(decision.get("message", "")).strip()
+                if template_step is not None:
+                    template_index += 1
 
-            if not action:
-                raise RuntimeError(
-                    "Planner requested an actor turn without a message"
-                )
+            if replan_required:
+                continue
 
-            actor_response = self.clients["ACTOR"].complete(
-                self.actor_model,
-                prompts.actor_prompt(query, context, action, history),
+            if using_cached_plan:
+                # The local planner exhausted its turns. Escalate to cloud.
+                using_cached_plan = False
+                template = None
+                escalated = True
+                continue
+
+            raise RuntimeError(
+                f"Planner did not finish within {self.max_turns} actor turns"
             )
-
-            history.append(
-                {"message": action, "response": actor_response}
-            )
-
-            trace.extend(
-                [
-                    {"type": "message", "content": action},
-                    {"type": "output", "content": actor_response},
-                ]
-            )
-
-            if template_step is not None:
-                template_index += 1
-
-        raise RuntimeError(
-            f"Planner did not finish within {self.max_turns} actor turns"
-        )
-
     @staticmethod
     def _filter_execution_trace(
         trace: list[dict[str, str]],
