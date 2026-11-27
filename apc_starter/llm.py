@@ -15,11 +15,20 @@ class OpenAICompatibleClient:
         self.timeout = timeout
 
     @classmethod
-    def from_env(cls) -> "OpenAICompatibleClient":
-        return cls(
-            os.environ.get("APC_BASE_URL", "https://api.openai.com/v1"),
-            os.environ.get("APC_API_KEY", ""),
-        )
+    @classmethod
+def from_env(cls, role: str) -> "OpenAICompatibleClient":
+    role = role.upper()
+
+    base_url = (
+        os.environ.get(f"APC_{role}_BASE_URL")
+        or os.environ.get("APC_BASE_URL", "https://api.openai.com/v1")
+    )
+    api_key = (
+        os.environ.get(f"APC_{role}_API_KEY")
+        or os.environ.get("APC_API_KEY", "")
+    )
+
+    return cls(base_url, api_key)
 
     def complete(self, model: str, prompt: str, *, json_mode: bool = False) -> str:
         if not self.api_key:
