@@ -34,7 +34,7 @@ class APCAgent:
         actor_model: str,
         cache_model: str,
         judge_model: str,
-        max_turns: int = 6,
+        max_turns: int = 10,
     ):
         self.clients = {
             role.upper(): client for role, client in clients.items()
