@@ -58,7 +58,13 @@ def main() -> None:
     )
 
     result = agent.run(args.query, context)
-    print(result.answer)
+
+    if result.answer:
+        print(result.answer)
+
+    if result.error:
+        print(f"\n[APC error: {result.error}]")
+
     print(
         f"\n[APC keyword={result.keyword!r} "
         f"cache_hit={result.cache_hit} "
