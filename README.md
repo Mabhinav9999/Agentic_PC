@@ -1,83 +1,119 @@
 # APC Starter
 
-A small, provider-neutral implementation of the Agentic Plan Caching (APC) loop. It keeps reusable **plan templates** in a local JSON cache, adapts a cached template for a new task, and only adds templates after an execution is judged successful.
+A small, provider-neutral implementation of the Agentic Plan Caching (APC) loop. It keeps reusable plan templates in a local JSON cache, adapts cached templates for new tasks, and adds templates after successful executions.
 
-This is the standalone APC stage. It does not implement wireless placement, shared edge storage, KV/prompt-state caching, or Minions chunk scheduling yet.
+This is the standalone APC stage. It does not implement wireless placement, shared edge storage, KV or prompt-state caching, or Minions chunk scheduling yet.
 
 ## Requirements
 
 - Python 3.10 or newer
-- An OpenAI-compatible chat-completions endpoint and API key
+- An OpenAI-compatible chat-completions endpoint for each model role
 
-The code uses only the Python standard library. It can work with a local endpoint as well as a hosted endpoint. Requests and context are sent to whichever endpoint you configure, so use an endpoint appropriate for your data.
+The code uses only the Python standard library. By default, model roles use a local Ollama endpoint at `http://localhost:11434/v1`. You can configure roles to use other compatible endpoints. Requests and context are sent to the endpoints you configure; choose endpoints appropriate for your data.
 
-## Paper model profile
+## Model roles
 
-The APC paper's main setup used GPT-4o as the large planner, Llama 3.1 8B as both the small planner and actor, and GPT-4o-mini for keyword extraction and cache generation. This prototype also has an evidence-sufficiency gate; it defaults to the local Llama model. The paper used GPT-4o as an offline evaluation model, not as an extra runtime gate.
+APC uses separate configurable roles:
 
-## No hosted API bill: run every role locally
+- `KEYWORD`: extracts a task keyword for cache lookup.
+- `SMALL`: adapts and executes cached plans.
+- `LARGE`: creates a plan when a cached plan is unavailable or fails.
+- `ACTOR`: performs the task using the supplied context.
+- `CACHE`: generates a reusable plan template after a successful execution.
+- `JUDGE`: checks whether execution evidence is sufficient and, during evaluation, scores answers against reference answers.
 
-You can replace all paper models with a local open-weight model. Install Ollama, then choose one size:
+The default local model name is `qwen3.5:4b` for local roles. The large planner's default model name is `@cf/meta/llama-3.3-70b-instruct-fp8-fast`. A model name alone does not configure its provider: to use Cloudflare Workers AI for `LARGE`, configure that role's base URL and API key as described below.
+
+The paper's model profile is described for reference; using other models or serving providers does not reproduce the paper's exact setup.
+
+## Run all roles locally with Ollama
+
+Install Ollama and download the model:
 
 ```powershell
-# Lower resource use (about 3.3-4.0 GB model download)
 ollama pull qwen3.5:4b
-
-# Stronger, larger option (about 6.6-7.6 GB model download)
-# ollama pull qwen3.5:9b
 ```
 
-In the same PowerShell terminal used to run APC, route every role to Ollama and use the chosen model for every role:
+In the same PowerShell terminal used to run APC, configure the roles to use Ollama:
 
 ```powershell
 $env:APC_BASE_URL = "http://localhost:11434/v1"
 $env:APC_API_KEY = "ollama"
+
 $env:APC_KEYWORD_MODEL = "qwen3.5:4b"
-$env:APC_CACHE_MODEL = "qwen3.5:4b"
-$env:APC_LARGE_MODEL = "qwen3.5:4b"
 $env:APC_SMALL_MODEL = "qwen3.5:4b"
+$env:APC_LARGE_MODEL = "qwen3.5:4b"
 $env:APC_ACTOR_MODEL = "qwen3.5:4b"
+$env:APC_CACHE_MODEL = "qwen3.5:4b"
 $env:APC_JUDGE_MODEL = "qwen3.5:4b"
 ```
 
-To use the 9B option, replace `qwen3.5:4b` in the commands with `qwen3.5:9b`. Ollama requires an API-key value for compatibility, but ignores `ollama`; no OpenAI or Together key is needed. Local inference has no per-token API charge, but uses your computer's memory, compute, and electricity. The results may differ from the paper's GPT-4o/Llama setup.
+Ollama requires an API-key field for compatibility, but ignores the value `ollama`. Local inference has no per-token API charge, but uses your computer's memory, compute, and electricity.
 
-## Configure
+## Configure a hosted large planner
 
-PowerShell example:
-
-```powershell
-$env:APC_KEYWORD_MODEL = "gpt-4o-mini"
-$env:APC_CACHE_MODEL = "gpt-4o-mini"
-$env:APC_LARGE_MODEL = "gpt-4o"
-$env:APC_JUDGE_MODEL = "llama3.1:8b"
-$env:APC_SMALL_MODEL = "llama3.1:8b"
-$env:APC_ACTOR_MODEL = "llama3.1:8b"
-
-# OpenAI roles (the default provider); one key can serve all OpenAI roles.
-$env:APC_API_KEY = "your-openai-api-key"
-
-# Local Llama roles. Ollama requires an API-key field but ignores its value.
-$env:APC_SMALL_BASE_URL = "http://localhost:11434/v1"
-$env:APC_SMALL_API_KEY = "ollama"
-$env:APC_ACTOR_BASE_URL = "http://localhost:11434/v1"
-$env:APC_ACTOR_API_KEY = "ollama"
-$env:APC_JUDGE_BASE_URL = "http://localhost:11434/v1"
-$env:APC_JUDGE_API_KEY = "ollama"
-```
-
-Each configured endpoint must implement `POST /chat/completions`. For each role (`KEYWORD`, `CACHE`, `SMALL`, `LARGE`, `ACTOR`, `JUDGE`), set `APC_<ROLE>_BASE_URL` and `APC_<ROLE>_API_KEY` to override the shared `APC_BASE_URL` and `APC_API_KEY`. The client appends `/chat/completions`.
-
-The OpenAI planner receives the task and actor responses, not the full context. The context is sent to the configured actor and judge endpoints (local in this example). Together AI removed its paper-era Llama model from serverless inference on March 6, 2026, so this example runs the Llama 3.1 8B Instruct model locally through Ollama instead. This uses the same model family but does not reproduce the paper's Together serving setup. Ollama lists `llama3.1:8b` at about 4.9 GB; inference needs additional memory for the model runtime and context.
-
-## Run
+Set the large planner's endpoint and secret in your terminal environment. Use the endpoint URL and API key provided by your model host:
 
 ```powershell
-python -m apc_starter --query "What is the working capital ratio for Example Co in FY2024?" --context-file .\data\example.txt
+$env:APC_LARGE_BASE_URL = "<OpenAI-compatible endpoint base URL>"
+$env:APC_LARGE_API_KEY = "<your API key>"
+$env:APC_LARGE_MODEL = "<model name supported by that endpoint>"
 ```
 
-The default cache is `apc_cache.json` in the current directory. Use `--cache` to choose another path. The cache is plain JSON, so it can be inspected and edited during development.
+Do not put real API keys in source code, README files, dataset files, or commits. If a key was exposed in a public repository or chat, revoke it and create a replacement.
 
-The initial implementation uses exact keyword matching, matching APC's primary design. Fuzzy retrieval, edge placement, plan scoring, and Minions integration are intentionally deferred until the core APC path is working.
+Each role can have its own provider settings:
 
-After each run, the CLI prints input/output token usage by model role when the endpoint includes token counts in its response. OpenAI token counts are billable usage for the cloud calls; local Ollama token counts are local inference and are not OpenAI API usage. The number of turns and context length affect usage. If an endpoint omits usage metadata, the CLI says so rather than estimating.
+```text
+APC_<ROLE>_BASE_URL
+APC_<ROLE>_API_KEY
+```
+
+Supported role names are `KEYWORD`, `SMALL`, `LARGE`, `ACTOR`, `CACHE`, and `JUDGE`. Role-specific settings override the shared `APC_BASE_URL` and `APC_API_KEY`. The client appends `/chat/completions` to the configured base URL.
+
+## Run one task
+
+Create a text context file, then run:
+
+```powershell
+python -m apc_starter `
+  --query "What is the working capital ratio for Example Co in FY2024?" `
+  --context-file .\data\example.txt
+```
+
+The default cache file is `apc_cache.json` in the current directory. Choose another path with `--cache`.
+
+## Evaluate a JSONL dataset
+
+Each non-empty dataset line must be a JSON object containing string fields named `query`, `context`, and `reference_answer`. An optional `id` field is included in the output.
+
+Example `data\examples.jsonl`:
+
+```json
+{"id":"example-1","query":"What is the working capital ratio?","context":"Current assets are 200. Current liabilities are 100. The ratio is current assets divided by current liabilities.","reference_answer":"The working capital ratio is 2.0."}
+```
+
+Run the evaluator:
+
+```powershell
+python -m apc_starter.evaluate `
+  --dataset .\data\examples.jsonl `
+  --out .\results.jsonl `
+  --cache .\apc_cache.json
+```
+
+Optional: limit how many dataset rows are processed:
+
+```powershell
+python -m apc_starter.evaluate `
+  --dataset .\data\examples.jsonl `
+  --out .\results.jsonl `
+  --cache .\apc_cache.json `
+  --limit 10
+```
+
+The evaluator writes one JSON object per input row to the `--out` JSONL file. Each row includes the APC result, whole-run `latency_s`, and a `model_calls` list containing recorded model-call metrics.
+
+It also writes a summary file beside the output. For `results.jsonl`, the summary is `results.summary.json`. It includes whole-run latency percentiles, model-call latency percentiles, call and retry counts, cache hit rate, accuracy, and token totals when the provider returns token usage.
+
+Token totals are unavailable when an endpoint does not report usage. The evaluator does not estimate token counts or API costs. Its accuracy score comes from the configured `JUDGE` model and is an automated evaluation, not a human-verified result.
