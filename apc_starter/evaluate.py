@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,9 @@ def model_env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
-def make_agent(cache_path: str) -> tuple[APCAgent, OpenAICompatibleClient, str]:
+def make_agent(
+    cache_path: str,
+) -> tuple[APCAgent, dict[str, OpenAICompatibleClient], str]:
     roles = ("KEYWORD", "SMALL", "LARGE", "ACTOR", "CACHE", "JUDGE")
     clients = {
         role: OpenAICompatibleClient.from_env(role)
@@ -42,16 +45,48 @@ def make_agent(cache_path: str) -> tuple[APCAgent, OpenAICompatibleClient, str]:
         cache_model=model_env("APC_CACHE_MODEL", local_model),
         judge_model=judge_model,
     )
-    return agent, clients["JUDGE"], judge_model
+    return agent, clients, judge_model
 
 
-def nearest_rank_percentile(values: list[float], percentile: int) -> float | None:
+def nearest_rank_percentile(
+    values: list[float],
+    percentile: int,
+) -> float | None:
     if not values:
         return None
 
     ordered = sorted(values)
     index = max(0, (percentile * len(ordered) + 99) // 100 - 1)
     return ordered[index]
+
+
+def collect_call_metrics(
+    clients: dict[str, OpenAICompatibleClient],
+    metric_starts: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Collect calls made by any role since the start of this dataset row."""
+    calls: list[dict[str, Any]] = []
+
+    for role, client in clients.items():
+        for metric in client.call_metrics[metric_starts[role]:]:
+            call = asdict(metric)
+            call["role"] = role
+            calls.append(call)
+
+    return calls
+
+
+def numeric_total(
+    calls: list[dict[str, Any]],
+    field: str,
+) -> int | float | None:
+    values = [
+        call[field]
+        for call in calls
+        if isinstance(call.get(field), (int, float))
+        and not isinstance(call.get(field), bool)
+    ]
+    return sum(values) if values else None
 
 
 def main() -> None:
@@ -65,17 +100,23 @@ def main() -> None:
     args = parser.parse_args()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    agent, judge_client, judge_model = make_agent(args.cache)
+    agent, clients, judge_model = make_agent(args.cache)
 
     rows: list[dict[str, Any]] = []
     latencies: list[float] = []
     scored: list[bool] = []
+    all_calls: list[dict[str, Any]] = []
 
     with args.dataset.open("r", encoding="utf-8") as source:
         with args.out.open("w", encoding="utf-8") as output:
             for line_number, line in enumerate(source, start=1):
                 if args.limit is not None and len(rows) >= args.limit:
                     break
+
+                metric_starts = {
+                    role: len(client.call_metrics)
+                    for role, client in clients.items()
+                }
 
                 try:
                     item = json.loads(line)
@@ -102,7 +143,7 @@ def main() -> None:
 
                     if result.answer and not run_error:
                         try:
-                            judgment = judge_client.complete(
+                            judgment = clients["JUDGE"].complete(
                                 judge_model,
                                 correctness_judge_prompt(
                                     query,
@@ -147,12 +188,27 @@ def main() -> None:
                         "error": f"{type(exc).__name__}: {exc}",
                     }
 
+                calls = collect_call_metrics(clients, metric_starts)
+                row["model_calls"] = calls
+                all_calls.extend(calls)
+
                 rows.append(row)
                 output.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     requests = len(rows)
     hit_count = sum(row.get("cache_hit") is True for row in rows)
     error_count = sum(bool(row.get("error")) for row in rows)
+
+    call_latencies = [
+        float(call["elapsed_s"])
+        for call in all_calls
+        if isinstance(call.get("elapsed_s"), (int, float))
+    ]
+    retry_count = sum(
+        max(0, int(call.get("attempts", 1)) - 1)
+        for call in all_calls
+        if isinstance(call.get("attempts", 1), (int, float))
+    )
 
     summary = {
         "requests": requests,
@@ -166,6 +222,19 @@ def main() -> None:
         "error_rate": error_count / requests if requests else None,
         "latency_p50_s": nearest_rank_percentile(latencies, 50),
         "latency_p95_s": nearest_rank_percentile(latencies, 95),
+        "model_call_count": len(all_calls),
+        "model_call_retry_count": retry_count,
+        "model_call_latency_p50_s": nearest_rank_percentile(
+            call_latencies,
+            50,
+        ),
+        "model_call_latency_p95_s": nearest_rank_percentile(
+            call_latencies,
+            95,
+        ),
+        "input_tokens": numeric_total(all_calls, "input_tokens"),
+        "output_tokens": numeric_total(all_calls, "output_tokens"),
+        "total_tokens": numeric_total(all_calls, "total_tokens"),
     }
 
     summary_path = args.out.with_name(
