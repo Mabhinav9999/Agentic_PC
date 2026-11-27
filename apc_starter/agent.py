@@ -70,7 +70,6 @@ class APCAgent:
                 planner_model,
                 prompts.planner_prompt(
                     query,
-                    context,
                     history,
                     template.__dict__ if template else None,
                 ),
