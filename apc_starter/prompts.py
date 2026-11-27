@@ -57,12 +57,19 @@ Actor evidence: {_json(history)}
 Proposed answer: {answer}
 JSON:"""
 
+def template_prompt(
+    keyword: str,
+    trace: list[dict[str, str]],
+) -> str:
+    return f"""You will see a filtered JSON trace showing the workflow of a planner language model collaborating with an actor language model to solve a task. Clean up the workflow so it can be reused as a reference template for similar tasks.
 
-def template_prompt(keyword: str, trace: list[dict[str, str]]) -> str:
-    return f"""Generalize this successful agent execution into a reusable plan template.
-Return only valid JSON with a \"workflow\" array of objects. Each object must have \"type\" (\"message\", \"output\", or \"answer\") and \"content\" (string).
-Preserve the order of actions and expected information. Remove entity names, dates, numbers, and other task-specific values. Do not include the actual answer. Start with a message and end with an answer step.
+Requirements:
+1. Return a JSON object with a "workflow" array. Each workflow item must have a "type" and "content".
+2. The type must be "message", "output", or "answer".
+3. Remove problem-specific details, including entity names, dates, and numbers.
+4. Preserve the workflow order: start with a "message", then maintain the output-to-message/answer sequence, and end with an "answer".
+5. Return valid JSON that can be parsed by Python's json.loads().
 
 Task keyword: {keyword}
-Successful execution trace: {_json(trace)}
+Filtered JSON trace: {_json(trace)}
 JSON:"""
