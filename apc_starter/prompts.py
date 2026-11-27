@@ -73,3 +73,19 @@ Requirements:
 Task keyword: {keyword}
 Filtered JSON trace: {_json(trace)}
 JSON:"""
+
+def correctness_judge_prompt(
+    query: str,
+    reference_answer: str,
+    response: str,
+) -> str:
+    return f"""You are a judge that grades numeric answers to data-intensive reasoning problems.
+
+This is the question: {query}
+This is the reference answer: {reference_answer}
+This is the answer given by a language model: {response}
+
+Please grade it. Requirements:
+1. Allow minor deviations, including different units, percentages instead of decimals, and small rounding or numerical errors.
+2. Mark incorrect answers wrong if the calculation is materially inaccurate, the direction is wrong, or the answer invents unsupported facts.
+3. Reply only with "1" for correct or "0" for incorrect."""
