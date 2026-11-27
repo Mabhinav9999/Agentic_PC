@@ -178,17 +178,52 @@ class APCAgent:
             f"Planner did not finish within {self.max_turns} actor turns"
         )
 
+    @staticmethod
+    def _filter_execution_trace(
+        trace: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        allowed_types = {"message", "output", "answer"}
+        filtered: list[dict[str, str]] = []
+
+        for item in trace:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = item.get("type")
+            content = item.get("content")
+
+            if item_type not in allowed_types or not isinstance(content, str):
+                continue
+
+            content = " ".join(content.split())
+            if content:
+                filtered.append(
+                    {"type": item_type, "content": content}
+                )
+
+        if not filtered:
+            return []
+
+        if filtered[0]["type"] != "message":
+            return []
+
+        if filtered[-1]["type"] != "answer":
+            return []
+
+        return filtered
+
     def _generate_template(
         self,
         keyword: str,
         trace: list[dict[str, str]],
     ) -> list[dict[str, str]]:
-        if not trace:
+        filtered_trace = self._filter_execution_trace(trace)
+        if not filtered_trace:
             return []
 
         raw = self.clients["CACHE"].complete(
             self.cache_model,
-            prompts.template_prompt(keyword, trace),
+            prompts.template_prompt(keyword, filtered_trace),
             json_mode=True,
         )
 
