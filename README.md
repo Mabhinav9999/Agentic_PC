@@ -112,7 +112,13 @@ python -m apc_starter.evaluate `
   --limit 10
 ```
 
-The evaluator writes one JSON object per input row to the `--out` JSONL file. Each row includes the APC result, whole-run `latency_s`, and a `model_calls` list containing recorded model-call metrics.
+The evaluator writes one JSON object per input row to the `--out` JSONL file. Each row includes the APC result, whole-run `latency_s`, and a `model_calls` list with metrics for the model calls made during that row.
+
+It also writes a summary file beside the output. For `results.jsonl`, the summary is `results.summary.json`. It includes whole-run and model-call latency percentiles, total call and retry counts, cache hit rate, accuracy, and token totals when providers report token usage.
+
+The summary's `model_calls_by_role` section breaks down call count, retries, latency percentiles, and reported input, output, and total tokens for each APC role: `KEYWORD`, `SMALL`, `LARGE`, `ACTOR`, `CACHE`, and `JUDGE`.
+
+Token totals are unavailable when an endpoint does not report usage. The evaluator does not estimate token counts or API costs. Its accuracy score comes from the configured `JUDGE` model and is an automated evaluation, not a human-verified result.
 
 It also writes a summary file beside the output. For `results.jsonl`, the summary is `results.summary.json`. It includes whole-run latency percentiles, model-call latency percentiles, call and retry counts, cache hit rate, accuracy, and token totals when the provider returns token usage.
 
