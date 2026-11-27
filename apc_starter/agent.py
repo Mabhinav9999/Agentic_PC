@@ -20,6 +20,7 @@ class AgentResult:
     actor_turns: int
     template_added: bool
     evidence_sufficient: bool
+    error: str | None = None
 
 
 class APCAgent:
@@ -48,7 +49,32 @@ class APCAgent:
         self.judge_model = judge_model
         self.max_turns = max_turns
 
-        def run(self, query: str, context: str) -> AgentResult:
+    def run(self, query: str, context: str) -> AgentResult:
+        state: dict[str, Any] = {
+            "keyword": "",
+            "cache_hit": False,
+            "actor_turns": 0,
+        }
+
+        try:
+            return self._run(query, context, state)
+        except Exception as exc:
+            return AgentResult(
+                answer="",
+                keyword=state["keyword"],
+                cache_hit=state["cache_hit"],
+                actor_turns=state["actor_turns"],
+                template_added=False,
+                evidence_sufficient=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    def _run(
+        self,
+        query: str,
+        context: str,
+        state: dict[str, Any],
+    ) -> AgentResult:
         keyword = self.clients["KEYWORD"].complete(
             self.keyword_model,
             prompts.keyword_prompt(query),
@@ -57,8 +83,12 @@ class APCAgent:
         if not keyword:
             raise RuntimeError("Keyword extraction returned an empty keyword")
 
+        state["keyword"] = keyword
+
         template = self.cache.get(keyword)
         initial_cache_hit = template is not None
+        state["cache_hit"] = initial_cache_hit
+
         using_cached_plan = initial_cache_hit
         escalated = False
         total_actor_turns = 0
@@ -126,7 +156,6 @@ class APCAgent:
                     success = judged.get("success") is True
 
                     if not success and using_cached_plan:
-                        # Discard the cached attempt and replan from scratch.
                         using_cached_plan = False
                         template = None
                         escalated = True
@@ -134,29 +163,38 @@ class APCAgent:
                         break
 
                     added = False
+                    generation_error = None
+
                     if success and (not initial_cache_hit or escalated):
                         trace.append({"type": "answer", "content": answer})
-                        workflow = self._generate_template(keyword, trace)
 
-                        if workflow:
-                            self.cache.put(
-                                PlanTemplate(
-                                    keyword=keyword,
-                                    workflow=workflow,
-                                    created_at=datetime.now(
-                                        timezone.utc
-                                    ).isoformat(),
+                        try:
+                            workflow = self._generate_template(keyword, trace)
+                            if workflow:
+                                self.cache.put(
+                                    PlanTemplate(
+                                        keyword=keyword,
+                                        workflow=workflow,
+                                        created_at=datetime.now(
+                                            timezone.utc
+                                        ).isoformat(),
+                                    )
                                 )
+                                added = True
+                        except Exception as exc:
+                            generation_error = (
+                                f"Template generation failed: "
+                                f"{type(exc).__name__}: {exc}"
                             )
-                            added = True
 
                     return AgentResult(
-                        answer,
-                        keyword,
-                        initial_cache_hit,
-                        total_actor_turns,
-                        added,
-                        success,
+                        answer=answer,
+                        keyword=keyword,
+                        cache_hit=initial_cache_hit,
+                        actor_turns=total_actor_turns,
+                        template_added=added,
+                        evidence_sufficient=success,
+                        error=generation_error,
                     )
 
                 if status != "act":
@@ -182,6 +220,8 @@ class APCAgent:
                 )
 
                 total_actor_turns += 1
+                state["actor_turns"] = total_actor_turns
+
                 history.append(
                     {"message": action, "response": actor_response}
                 )
@@ -208,6 +248,7 @@ class APCAgent:
             raise RuntimeError(
                 f"Planner did not finish within {self.max_turns} actor turns"
             )
+
     @staticmethod
     def _filter_execution_trace(
         trace: list[dict[str, str]],
@@ -293,7 +334,6 @@ class APCAgent:
     def _json_object(text: str, source: str) -> dict[str, Any]:
         try:
             value = json.loads(text)
-
         except json.JSONDecodeError:
             start, end = text.find("{"), text.rfind("}")
 
@@ -304,7 +344,6 @@ class APCAgent:
 
             try:
                 value = json.loads(text[start : end + 1])
-
             except json.JSONDecodeError as exc:
                 raise RuntimeError(
                     f"{source} returned malformed JSON"
