@@ -9,14 +9,12 @@ from typing import Any
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
-
 def keyword_prompt(query: str) -> str:
-    return f"""Extract the higher-level task or intent from the user query.
-Return only a short keyword or task phrase, independent of names, dates, numbers, and other instance-specific details.
-
-Query: {query}
-Keyword:"""
-
+    return f"""Can you help me summarize what is the 'task' or 'keyword'
+describing the higher-level goal or intent of this query? Please answer only
+with the task / keyword, which must be independent from problem-specific
+details.
+{query}"""
 
 def planner_prompt(
     query: str,
