@@ -61,17 +61,30 @@ class APCAgent:
         cache_hit = template is not None
         history: list[dict[str, str]] = []
         trace: list[dict[str, str]] = []
+        template_index = 0
 
         planner_role = "SMALL" if cache_hit else "LARGE"
         planner_model = self.small_model if cache_hit else self.large_model
 
         for _ in range(self.max_turns):
+            template_step = None
+            if (
+                cache_hit
+                and template is not None
+                and template_index < len(template.workflow)
+            ):
+                step = template.workflow[template_index]
+                template_step = {
+                    "type": step["type"],
+                    "content": step["content"],
+                }
+
             planner_raw = self.clients[planner_role].complete(
                 planner_model,
                 prompts.planner_prompt(
                     query,
                     history,
-                    template.__dict__ if template else None,
+                    template_step,
                 ),
                 json_mode=True,
             )
@@ -144,6 +157,9 @@ class APCAgent:
                     {"type": "output", "content": actor_response},
                 ]
             )
+
+            if template_step is not None:
+                template_index += 1
 
         raise RuntimeError(
             f"Planner did not finish within {self.max_turns} actor turns"
