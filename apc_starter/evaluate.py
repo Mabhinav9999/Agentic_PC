@@ -16,6 +16,9 @@ from .llm import OpenAICompatibleClient
 from .prompts import correctness_judge_prompt
 
 
+ROLES = ("KEYWORD", "SMALL", "LARGE", "ACTOR", "CACHE", "JUDGE")
+
+
 def model_env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
@@ -23,10 +26,9 @@ def model_env(name: str, default: str) -> str:
 def make_agent(
     cache_path: str,
 ) -> tuple[APCAgent, dict[str, OpenAICompatibleClient], str]:
-    roles = ("KEYWORD", "SMALL", "LARGE", "ACTOR", "CACHE", "JUDGE")
     clients = {
         role: OpenAICompatibleClient.from_env(role)
-        for role in roles
+        for role in ROLES
     }
 
     local_model = model_env("APC_LOCAL_MODEL", "qwen3.5:4b")
@@ -87,6 +89,43 @@ def numeric_total(
         and not isinstance(call.get(field), bool)
     ]
     return sum(values) if values else None
+
+
+def summarize_calls_by_role(
+    calls: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Summarize model-call counts, retries, latency, and tokens by role."""
+    summaries: dict[str, dict[str, Any]] = {}
+
+    for role in ROLES:
+        role_calls = [
+            call for call in calls
+            if call.get("role") == role
+        ]
+
+        call_latencies = [
+            float(call["elapsed_s"])
+            for call in role_calls
+            if isinstance(call.get("elapsed_s"), (int, float))
+        ]
+
+        retry_count = sum(
+            max(0, int(call.get("attempts", 1)) - 1)
+            for call in role_calls
+            if isinstance(call.get("attempts", 1), (int, float))
+        )
+
+        summaries[role] = {
+            "call_count": len(role_calls),
+            "retry_count": retry_count,
+            "latency_p50_s": nearest_rank_percentile(call_latencies, 50),
+            "latency_p95_s": nearest_rank_percentile(call_latencies, 95),
+            "input_tokens": numeric_total(role_calls, "input_tokens"),
+            "output_tokens": numeric_total(role_calls, "output_tokens"),
+            "total_tokens": numeric_total(role_calls, "total_tokens"),
+        }
+
+    return summaries
 
 
 def main() -> None:
@@ -235,6 +274,7 @@ def main() -> None:
         "input_tokens": numeric_total(all_calls, "input_tokens"),
         "output_tokens": numeric_total(all_calls, "output_tokens"),
         "total_tokens": numeric_total(all_calls, "total_tokens"),
+        "model_calls_by_role": summarize_calls_by_role(all_calls),
     }
 
     summary_path = args.out.with_name(
