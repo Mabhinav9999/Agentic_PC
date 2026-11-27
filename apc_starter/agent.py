@@ -68,6 +68,7 @@ class APCAgent:
 
         for _ in range(self.max_turns):
             template_step = None
+
             if (
                 cache_hit
                 and template is not None
@@ -88,11 +89,13 @@ class APCAgent:
                 ),
                 json_mode=True,
             )
+
             decision = self._json_object(planner_raw, "planner")
             status = decision.get("status")
 
             if status == "final":
                 answer = str(decision.get("answer", "")).strip()
+
                 if not answer:
                     raise RuntimeError(
                         "Planner returned final status without an answer"
@@ -111,17 +114,22 @@ class APCAgent:
                     ),
                     "judge",
                 )
+
                 success = judged.get("success") is True
                 added = False
 
                 if success and not cache_hit:
+                    trace.append({"type": "answer", "content": answer})
                     workflow = self._generate_template(keyword, trace)
+
                     if workflow:
                         self.cache.put(
                             PlanTemplate(
                                 keyword=keyword,
                                 workflow=workflow,
-                                created_at=datetime.now(timezone.utc).isoformat(),
+                                created_at=datetime.now(
+                                    timezone.utc
+                                ).isoformat(),
                             )
                         )
                         added = True
@@ -141,6 +149,7 @@ class APCAgent:
                 )
 
             action = str(decision.get("message", "")).strip()
+
             if not action:
                 raise RuntimeError(
                     "Planner requested an actor turn without a message"
@@ -150,7 +159,11 @@ class APCAgent:
                 self.actor_model,
                 prompts.actor_prompt(query, context, action, history),
             )
-            history.append({"message": action, "response": actor_response})
+
+            history.append(
+                {"message": action, "response": actor_response}
+            )
+
             trace.extend(
                 [
                     {"type": "message", "content": action},
@@ -178,6 +191,7 @@ class APCAgent:
             prompts.template_prompt(keyword, trace),
             json_mode=True,
         )
+
         data = self._json_object(raw, "template generator")
         workflow: Any = data.get("workflow")
 
@@ -185,6 +199,7 @@ class APCAgent:
             return []
 
         normalized: list[dict[str, str]] = []
+
         for item in workflow:
             if (
                 not isinstance(item, dict)
@@ -193,6 +208,7 @@ class APCAgent:
                 return []
 
             content = item.get("content")
+
             if not isinstance(content, str) or not content.strip():
                 return []
 
@@ -212,17 +228,26 @@ class APCAgent:
     def _json_object(text: str, source: str) -> dict[str, Any]:
         try:
             value = json.loads(text)
+
         except json.JSONDecodeError:
             start, end = text.find("{"), text.rfind("}")
+
             if start < 0 or end <= start:
-                raise RuntimeError(f"{source} did not return valid JSON")
+                raise RuntimeError(
+                    f"{source} did not return valid JSON"
+                )
 
             try:
                 value = json.loads(text[start : end + 1])
+
             except json.JSONDecodeError as exc:
-                raise RuntimeError(f"{source} returned malformed JSON") from exc
+                raise RuntimeError(
+                    f"{source} returned malformed JSON"
+                ) from exc
 
         if not isinstance(value, dict):
-            raise RuntimeError(f"{source} response must be a JSON object")
+            raise RuntimeError(
+                f"{source} response must be a JSON object"
+            )
 
         return value
