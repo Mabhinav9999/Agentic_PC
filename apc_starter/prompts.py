@@ -21,9 +21,9 @@ Keyword:"""
 def planner_prompt(
     query: str,
     history: list[dict[str, str]],
-    template: dict[str, Any] | None,
+    template_step: dict[str, str] | None,
 ) -> str:
-    template_text = _json(template) if template else "None"
+    step_text = _json(template_step) if template_step else "None"
 
     return f"""You are the planning component of a Plan-Act agent.
 Return exactly one JSON object with these keys:
@@ -31,13 +31,12 @@ Return exactly one JSON object with these keys:
 - message: a concise next instruction to the actor when status is act; otherwise an empty string.
 - answer: the final user-facing answer when status is final; otherwise an empty string.
 
-If a reference plan template is provided, adapt its method to the current task. Do not copy entity names, dates, or values from the template. Ask only for information not already present in prior actor responses. Do not claim success without sufficient evidence.
+If a reference plan step is provided, adapt that step to the current task. Do not copy entity names, dates, or values from it. Ask only for information not already present in prior actor responses. Do not claim success without sufficient evidence.
 
 Task: {query}
-Reference plan template: {template_text}
+Current reference plan step: {step_text}
 Previous actions and actor responses: {_json(history)}
 JSON:"""
-
 
 def actor_prompt(query: str, context: str, action: str, history: list[dict[str, str]]) -> str:
     return f"""You are the acting component of a Plan-Act agent. Follow the planner's requested action using only the supplied context and prior results.
