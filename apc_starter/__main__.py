@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from .agent import APCAgent
-from .cache import JsonPlanCache
+from .cache import TieredPlanCache
 from .llm import OpenAICompatibleClient
 
 
@@ -26,11 +26,6 @@ def main() -> None:
         type=Path,
         help="Text context available to the actor",
     )
-    parser.add_argument(
-        "--cache",
-        default="apc_cache.json",
-        help="Local plan cache JSON path",
-    )
     args = parser.parse_args()
 
     context = args.context_file.read_text(encoding="utf-8")
@@ -45,7 +40,7 @@ def main() -> None:
 
     agent = APCAgent(
         clients,
-        JsonPlanCache(args.cache),
+        TieredPlanCache.from_env(),
         keyword_model=model_env("APC_KEYWORD_MODEL", local_model),
         small_model=model_env("APC_SMALL_MODEL", local_model),
         large_model=model_env(
